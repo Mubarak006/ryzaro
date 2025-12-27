@@ -1,0 +1,8 @@
+{
+  "name": "Ryzaro",
+  "description": "A strict alarm clock app that requires you to complete challenging tasks (Math, Shaking, or QR scanning) before the alarm can be silenced. Features streak tracking and high-urgency UI.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
