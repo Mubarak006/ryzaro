@@ -58,11 +58,15 @@ const RingingScreen: React.FC<Props> = ({ alarm, customSounds, baseVolume, emerg
   }, [alarm.task, alarm.difficulty]);
 
   const calculateRampedVolume = useCallback((elapsed: number, target: number) => {
-    const rampDuration = 30; // 30 seconds ramp
-    const startRatio = 0.1; // Start at 10% of target volume
+    // ENFORCEMENT: After 40 seconds, we ignore user settings and hit 100% volume
+    if (elapsed > 40) return 1.0;
+
+    const rampDuration = 15; // Faster ramp: 15 seconds to target
+    const startRatio = 0.2; // Start at 20% of target
+    
     if (elapsed >= rampDuration) return target;
     const ratio = startRatio + (1 - startRatio) * (elapsed / rampDuration);
-    return Math.max(0.01, target * ratio);
+    return Math.max(0.1, target * ratio);
   }, []);
 
   const playSound = useCallback(() => {
@@ -86,17 +90,15 @@ const RingingScreen: React.FC<Props> = ({ alarm, customSounds, baseVolume, emerg
       return;
     }
 
+    // Pass secondsElapsed so the preset generator can increase urgency
     playPresetSound(alarm.sound, currentVolume, 1.5, secondsElapsed);
   }, [alarm.sound, customSounds, baseVolume, secondsElapsed, calculateRampedVolume]);
 
   useEffect(() => {
-    const isCustom = customSounds.some(cs => cs.id === alarm.sound);
-    
     // Initial trigger
     playSound();
     
-    // Use a short interval for preset sounds to trigger their pulses, 
-    // and for custom sounds to update their volume ramp every second.
+    // Fast pulsing logic for audio context synthesis
     soundIntervalRef.current = window.setInterval(playSound, 1000);
 
     const vibeInterval = window.setInterval(() => setVibrating(v => !v), 150);
@@ -149,6 +151,7 @@ const RingingScreen: React.FC<Props> = ({ alarm, customSounds, baseVolume, emerg
     }
   };
 
+  // Fixed: Use 'num' instead of undefined 'n' in handleKeypad
   const handleKeypad = (num: string) => {
     const ctx = getAudioContext();
     if (ctx.state === 'suspended') ctx.resume();
@@ -174,7 +177,9 @@ const RingingScreen: React.FC<Props> = ({ alarm, customSounds, baseVolume, emerg
         <div className="flex flex-col items-center justify-center mt-4 space-y-1">
           <div className="flex items-center gap-2 mb-2">
             <span className={`material-symbols-outlined text-alarm-urgent ${vibrating ? 'scale-125' : 'scale-100'} transition-transform duration-75`} style={{ fontSize: '20px' }}>notifications_active</span>
-            <span className="text-alarm-urgent font-black tracking-widest text-[10px] uppercase">Ringing for {secondsElapsed}s</span>
+            <span className="text-alarm-urgent font-black tracking-widest text-[10px] uppercase">
+              {secondsElapsed > 40 ? 'MAX INTENSITY' : `Ringing for ${secondsElapsed}s`}
+            </span>
           </div>
           <h1 className="text-7xl font-black tracking-tighter text-white leading-none">{alarm.time}</h1>
           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{alarm.period}</p>

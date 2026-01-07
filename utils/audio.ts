@@ -6,10 +6,26 @@ export const PRESET_SOUNDS = [
 ];
 
 let audioCtx: AudioContext | null = null;
+let masterGain: GainNode | null = null;
+let compressor: DynamicsCompressorNode | null = null;
 
 export const getAudioContext = () => {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Global chain for loudness and protection
+    compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-10, audioCtx.currentTime);
+    compressor.knee.setValueAtTime(40, audioCtx.currentTime);
+    compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+    compressor.attack.setValueAtTime(0, audioCtx.currentTime);
+    compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+    
+    masterGain = audioCtx.createGain();
+    masterGain.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
+    compressor.connect(masterGain);
+    masterGain.connect(audioCtx.destination);
   }
   return audioCtx;
 };
@@ -19,106 +35,89 @@ export const playPresetSound = (name: string, volume: number = 0.5, duration: nu
   if (ctx.state === 'suspended') ctx.resume();
   
   const now = ctx.currentTime;
-  const osc = ctx.createOscillator();
   const gain = ctx.createGain();
-  
-  osc.connect(gain);
-  gain.connect(ctx.destination);
+  gain.connect(compressor!);
 
-  const v = Math.min(1.0, volume);
+  // Adjust volume for high-urgency alarms
+  // If we've been ringing for more than 45 seconds, we ignore the user setting and go to 100%
+  const urgencyBoost = secondsElapsed > 45 ? 1.0 : volume;
+  const v = Math.min(1.0, urgencyBoost);
+
+  const createOsc = (freq: number, type: OscillatorType, startTime: number) => {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, startTime);
+    osc.connect(gain);
+    return osc;
+  };
 
   switch (name) {
-    case 'Radar':
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(2000, now);
-      gain.gain.setValueAtTime(0.8 * v, now);
-      gain.gain.setValueAtTime(0, now + 0.1);
-      gain.gain.setValueAtTime(0.8 * v, now + 0.2);
-      gain.gain.setValueAtTime(0, now + 0.3);
+    case 'Nuclear': {
+      // Harmonic stack for maximum dissonance and loudness
+      const osc1 = createOsc(1200, 'sawtooth', now);
+      const osc2 = createOsc(1210, 'square', now); // Detuned for thickness
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(v, now + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.8);
+      osc2.stop(now + 0.8);
       break;
-    case 'Nuclear':
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(1200, now);
-      osc.frequency.setValueAtTime(600, now + 0.2);
-      osc.frequency.setValueAtTime(1200, now + 0.4);
-      gain.gain.setValueAtTime(v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
-      break;
-    case 'Submarine':
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(400, now);
-      osc.frequency.exponentialRampToValueAtTime(100, now + 1.2);
-      gain.gain.setValueAtTime(0.7 * v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 1.2);
-      break;
-    case 'Orbit':
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(300, now);
-      osc.frequency.exponentialRampToValueAtTime(3000, now + 0.8);
-      gain.gain.setValueAtTime(0.5 * v, now);
+    }
+    case 'Siren': {
+      const osc = createOsc(400, 'sawtooth', now);
+      // Sweeping frequency is very piercing
+      osc.frequency.exponentialRampToValueAtTime(1200 + (secondsElapsed * 2), now + 0.5);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(v * 0.8, now + 0.1);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 1.0);
+      osc.start(now);
+      osc.stop(now + 1.0);
       break;
-    case 'Static':
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(Math.random() * 5000 + 100, now);
+    }
+    case 'Radar': {
+      const osc = createOsc(2500, 'square', now); // High pitch square wave is very annoying/loud
       gain.gain.setValueAtTime(v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      gain.gain.setValueAtTime(0, now + 0.08);
+      gain.gain.setValueAtTime(v, now + 0.15);
+      gain.gain.setValueAtTime(0, now + 0.23);
+      osc.start(now);
+      osc.stop(now + 0.3);
       break;
-    case 'Cyber Pulse':
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(100, now);
-      osc.frequency.exponentialRampToValueAtTime(2000, now + 0.1);
-      osc.frequency.exponentialRampToValueAtTime(100, now + 0.2);
-      gain.gain.setValueAtTime(0.8 * v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-      break;
-    case 'Classic Bell':
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, now);
+    }
+    case 'Loud Beep':
+    case 'Digital Alarm': {
+      const osc = createOsc(name === 'Loud Beep' ? 2800 : 2200, 'square', now);
       gain.gain.setValueAtTime(v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 1.2);
+      gain.gain.setValueAtTime(0, now + 0.15);
+      gain.gain.setValueAtTime(v, now + 0.3);
+      gain.gain.setValueAtTime(0, now + 0.45);
+      osc.start(now);
+      osc.stop(now + 0.5);
       break;
-    case 'Zen Strings':
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(220, now);
-      osc.frequency.linearRampToValueAtTime(440 + (secondsElapsed * 10), now + 1.0);
-      gain.gain.setValueAtTime(0.3 * v, now);
-      gain.gain.linearRampToValueAtTime(0.8 * v, now + 1.0);
-      break;
-    case 'Industrial Tech':
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(50, now);
-      osc.frequency.setValueAtTime(60, now + 0.1);
+    }
+    case 'Industrial Tech': {
+      const osc = createOsc(60, 'square', now);
+      const osc2 = createOsc(180, 'sawtooth', now);
       gain.gain.setValueAtTime(v, now);
       gain.gain.setValueAtTime(0, now + 0.05);
       gain.gain.setValueAtTime(v, now + 0.1);
+      osc.start(now);
+      osc2.start(now);
+      osc.stop(now + 0.2);
+      osc2.stop(now + 0.2);
       break;
-    case 'Siren':
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(440 + secondsElapsed, now);
-      osc.frequency.exponentialRampToValueAtTime(880 + secondsElapsed, now + 0.5);
-      gain.gain.setValueAtTime(0.5 * v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 1.0);
-      break;
-    case 'Morning Bell':
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1200, now);
+    }
+    default: {
+      // Fallback to basic loud pulse
+      const osc = createOsc(1000, 'sawtooth', now);
       gain.gain.setValueAtTime(v, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
-      break;
-    case 'Loud Beep':
-    case 'Digital Alarm':
-    default:
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(name === 'Loud Beep' ? 2200 : 2000, now);
-      gain.gain.setValueAtTime(0.6 * v, now);
-      gain.gain.setValueAtTime(0, now + 0.1);
-      gain.gain.setValueAtTime(0.6 * v, now + 0.2);
-      break;
+      gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+      osc.start(now);
+      osc.stop(now + duration);
+    }
   }
 
-  osc.start(now);
-  osc.stop(now + duration);
-  
-  return { osc, gain };
+  return { gain };
 };

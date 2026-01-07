@@ -30,7 +30,6 @@ export interface CustomSound {
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('SPLASH');
   
-  // Initialize alarms directly from storage to prevent race conditions with effects
   const [alarms, setAlarms] = useState<Alarm[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ALARMS);
@@ -46,7 +45,6 @@ const App: React.FC = () => {
     if (!saved) return { currentStreak: 0, bestStreak: 0, totalWakes: 0, history: [] };
     try {
       const parsed = JSON.parse(saved);
-      // Migration: ensure history matches new format if it was just strings before
       if (parsed.history && parsed.history.length > 0 && typeof parsed.history[0] === 'string') {
         parsed.history = parsed.history.map((date: string) => ({ date, task: 'Math', label: 'Legacy Alarm' }));
       }
@@ -60,9 +58,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem(STORAGE_KEY_CUSTOM_SOUNDS);
     try {
       return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
+    } catch (e) { return []; }
   });
 
   const [defaultSound, setDefaultSound] = useState<string>(() => {
@@ -82,6 +78,8 @@ const App: React.FC = () => {
   const [editingAlarm, setEditingAlarm] = useState<Alarm | null>(null);
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
   const [snoozeTrigger, setSnoozeTrigger] = useState<{ time: number, alarmId: string } | null>(null);
+  
+  // Track last triggered minute to prevent multi-triggering within the same minute
   const lastTriggeredMinute = useRef<string>("");
 
   const warmUpAudio = useCallback(() => {
@@ -92,7 +90,6 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // Only handle view transitions on mount
     const timeout = setTimeout(() => {
       const accepted = localStorage.getItem(STORAGE_KEY_CAUTION);
       setView(accepted === 'true' ? 'HOME' : 'CAUTION');
@@ -100,7 +97,6 @@ const App: React.FC = () => {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Persistence effects - these save state to localStorage whenever it changes
   useEffect(() => { localStorage.setItem(STORAGE_KEY_ALARMS, JSON.stringify(alarms)); }, [alarms]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY_STATS, JSON.stringify(stats)); }, [stats]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY_DEFAULT_SOUND, defaultSound); }, [defaultSound]);
@@ -112,34 +108,44 @@ const App: React.FC = () => {
     const checkAlarms = () => {
       if (view === 'RINGING') return;
       const now = new Date();
+      
+      // Handle Snooze logic first
       if (snoozeTrigger && now.getTime() >= snoozeTrigger.time) {
         setActiveAlarmId(snoozeTrigger.alarmId);
         setSnoozeTrigger(null);
         setView('RINGING');
         return;
       }
+
       const h = now.getHours();
       const m = now.getMinutes();
-      const day = (now.getDay() + 6) % 7; 
       const dateStr = now.toISOString().split('T')[0];
       const period = h >= 12 ? 'PM' : 'AM';
       const dispH = h % 12 || 12;
       const hourStr = dispH.toString().padStart(2, '0');
       const minStr = m.toString().padStart(2, '0');
+      
       const currentMinuteKey = `${hourStr}:${minStr}-${period}-${dateStr}`;
+      
+      // If we've already handled this minute, skip
       if (lastTriggeredMinute.current === currentMinuteKey) return;
 
       const ringing = alarms.find(a => {
         if (!a.active) return false;
-        const [aH, aM] = a.time.split(':');
-        const normalizedAlarmTime = `${parseInt(aH).toString().padStart(2, '0')}:${parseInt(aM).toString().padStart(2, '0')}`;
-        const normalizedCurrentTime = `${hourStr}:${minStr}`;
-        const timeMatches = normalizedAlarmTime === normalizedCurrentTime;
+        
+        // Normalize stored time (HH:mm) to ensure comparison works regardless of input source
+        const [storedH, storedM] = a.time.split(':');
+        const normStoredH = parseInt(storedH).toString().padStart(2, '0');
+        const normStoredM = parseInt(storedM).toString().padStart(2, '0');
+        
+        const timeMatches = normStoredH === hourStr && normStoredM === minStr;
         const periodMatches = a.period === period;
         
         if (a.date) {
           return timeMatches && periodMatches && a.date === dateStr;
         } else {
+          // 0 = Mon, 6 = Sun
+          const day = (now.getDay() + 6) % 7; 
           const dayMatches = a.days.length === 0 || a.days.includes(day);
           return timeMatches && periodMatches && dayMatches;
         }
@@ -152,6 +158,8 @@ const App: React.FC = () => {
         setView('RINGING');
       }
     };
+
+    // Fast interval for high-precision triggering
     const interval = setInterval(checkAlarms, 1000);
     return () => clearInterval(interval);
   }, [alarms, view, snoozeTrigger, warmUpAudio]);
@@ -205,7 +213,7 @@ const App: React.FC = () => {
   const activeRingingAlarm = useMemo(() => alarms.find(a => a.id === activeAlarmId) || alarms[0], [alarms, activeAlarmId]);
 
   return (
-    <div className="max-w-md mx-auto h-screen relative bg-background-light dark:bg-background-dark overflow-hidden shadow-2xl" onPointerDown={warmUpAudio}>
+    <div className="max-w-md mx-auto h-screen relative zen-gradient overflow-hidden shadow-2xl" onPointerDown={warmUpAudio}>
       {view === 'SPLASH' && <SplashScreen />}
       {view === 'CAUTION' && <CautionScreen onAccept={() => { warmUpAudio(); localStorage.setItem(STORAGE_KEY_CAUTION, 'true'); setView('HOME'); }} />}
       {view === 'HOME' && <HomeScreen alarms={alarms} stats={stats} onAdd={() => { setEditingAlarm(null); setInitialDate(undefined); setView('ADD_ALARM'); }} onEdit={(a) => { setEditingAlarm(a); setInitialDate(undefined); setView('ADD_ALARM'); }} onToggle={toggleAlarm} onOpenStats={() => setView('STATS')} onOpenSettings={() => setView('SETTINGS')} onOpenChat={() => setView('CHAT')} onOpenCalendar={() => setView('CALENDAR')} onSimulateAlarm={(id) => { warmUpAudio(); setActiveAlarmId(id); setView('RINGING'); }} />}

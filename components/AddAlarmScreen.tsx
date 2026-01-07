@@ -26,9 +26,18 @@ const AddAlarmScreen: React.FC<Props> = ({
   onCancel, 
   onDelete 
 }) => {
-  const [time, setTime] = useState(alarm?.time || '07:30');
-  const [period, setPeriod] = useState<'AM' | 'PM'>(alarm?.period || 'AM');
-  const [label, setLabel] = useState(alarm?.label || 'Alarm');
+  // Initial normalization: Convert stored 12h format to 24h for the <input type="time">
+  const initialTimeValue = useMemo(() => {
+    if (!alarm) return '07:30';
+    const [hStr, mStr] = alarm.time.split(':');
+    let h = parseInt(hStr);
+    if (alarm.period === 'PM' && h !== 12) h += 12;
+    if (alarm.period === 'AM' && h === 12) h = 0;
+    return `${h.toString().padStart(2, '0')}:${mStr}`;
+  }, [alarm]);
+
+  const [time, setTime] = useState(initialTimeValue);
+  const [label, setLabel] = useState(alarm?.label || 'Protocol');
   const [days, setDays] = useState<number[]>(alarm?.days || [0, 1, 2, 3, 4]);
   const [specificDate, setSpecificDate] = useState<string | undefined>(alarm?.date || initialDate);
   const [useSpecificDate, setUseSpecificDate] = useState<boolean>(!!(alarm?.date || initialDate));
@@ -39,12 +48,24 @@ const AddAlarmScreen: React.FC<Props> = ({
   const [isSelectingDate, setIsSelectingDate] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [activePreview, setActivePreview] = useState<string | null>(null);
-  
-  // Calendar picker state
   const [viewDate, setViewDate] = useState(new Date(specificDate || new Date()));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Derive display values for the UI
+  const [h24, mStr] = time.split(':');
+  const hNum = parseInt(h24);
+  const displayH12 = hNum % 12 || 12;
+  const currentPeriod = hNum >= 12 ? 'PM' : 'AM';
+
+  const handlePeriodToggle = (p: 'AM' | 'PM') => {
+    if (p === currentPeriod) return;
+    let newH = hNum;
+    if (p === 'PM' && hNum < 12) newH += 12;
+    if (p === 'AM' && hNum >= 12) newH -= 12;
+    setTime(`${newH.toString().padStart(2, '0')}:${mStr}`);
+  };
 
   useEffect(() => {
     if (showConfirm) {
@@ -54,10 +75,15 @@ const AddAlarmScreen: React.FC<Props> = ({
   }, [showConfirm]);
 
   const handleSave = () => {
+    // Final normalization for storage
+    const h12 = hNum % 12 || 12;
+    const finalTimeStr = `${h12.toString().padStart(2, '0')}:${mStr}`;
+    const finalPeriod = hNum >= 12 ? 'PM' : 'AM';
+
     onSave({
       id: alarm?.id || Math.random().toString(36).substr(2, 9),
-      time,
-      period,
+      time: finalTimeStr,
+      period: finalPeriod,
       label,
       days: useSpecificDate ? [] : days,
       date: useSpecificDate ? specificDate : undefined,
@@ -72,219 +98,144 @@ const AddAlarmScreen: React.FC<Props> = ({
     setDays(prev => prev.includes(idx) ? prev.filter(d => d !== idx) : [...prev, idx]);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64Data = event.target?.result as string;
-        const newCustomSound: CustomSound = {
-          id: `custom_${Date.now()}`,
-          name: file.name,
-          data: base64Data
-        };
-        onAddCustomSound(newCustomSound);
-        setSound(newCustomSound.id);
-        setShowConfirm(true);
-        previewSound(newCustomSound.id);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const previewSound = (soundId: string) => {
-    setActivePreview(soundId);
-    if (previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current = null;
-    }
-    const custom = customSounds.find(cs => cs.id === soundId);
-    if (custom) {
-      const audio = new Audio(custom.data);
-      audio.volume = 0.5;
-      audio.play();
-      previewAudioRef.current = audio;
-      setTimeout(() => {
-        audio.pause();
-        setActivePreview(prev => prev === soundId ? null : prev);
-      }, 3000);
-      return;
-    }
-    playPresetSound(soundId, 0.5, 2.0);
-    setTimeout(() => {
-      setActivePreview(prev => prev === soundId ? null : prev);
-    }, 2000);
-  };
-
-  const getSoundIcon = (name: string) => {
-    switch (name) {
-      case 'Radar': return 'radar';
-      case 'Nuclear': return 'emergency';
-      case 'Submarine': return 'waves';
-      case 'Orbit': return 'language';
-      case 'Static': return 'blur_on';
-      case 'Loud Beep': return 'notifications_active';
-      case 'Siren': return 'campaign';
-      case 'Digital Alarm': return 'alarm_on';
-      default: return 'music_note';
-    }
-  };
-
-  // Calendar Logic
-  const daysInMonth = useMemo(() => new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate(), [viewDate]);
-  const startOffset = useMemo(() => (new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay() + 6) % 7, [viewDate]);
-  
-  const calendarCells = useMemo(() => {
-    const cells = [];
-    for (let i = 0; i < startOffset; i++) cells.push(null);
-    for (let i = 1; i <= daysInMonth; i++) cells.push(i);
-    return cells;
-  }, [daysInMonth, startOffset]);
-
   const selectCalendarDate = (day: number) => {
     const selected = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
     setSpecificDate(selected.toISOString().split('T')[0]);
     setIsSelectingDate(false);
   };
 
+  const Header = ({ title, leftBtn, rightBtn }: { title: string, leftBtn?: React.ReactNode, rightBtn?: React.ReactNode }) => (
+    <header className="sticky top-0 z-10 flex items-center justify-between p-6 bg-transparent backdrop-blur-2xl border-b border-white/5">
+      {leftBtn || <button onClick={onCancel} className="text-primary font-black tracking-tight">Cancel</button>}
+      <h2 className="text-lg font-black tracking-widest uppercase">{title}</h2>
+      {rightBtn || <button onClick={handleSave} className="text-primary font-black tracking-tight">Save</button>}
+    </header>
+  );
+
   if (isSelectingTask) {
     return (
-      <div className="h-full flex flex-col bg-background-dark text-white p-5 overflow-y-auto no-scrollbar">
-        <div className="flex items-center justify-between mb-8">
-          <button onClick={() => setIsSelectingTask(false)} className="text-slate-400">
-            <span className="material-symbols-outlined">arrow_back_ios_new</span>
-          </button>
-          <h2 className="text-lg font-bold">Select Task</h2>
-          <button onClick={() => setIsSelectingTask(false)} className="text-primary font-bold">Done</button>
-        </div>
-        <h3 className="text-3xl font-bold mb-2 tracking-tight">Wake-up Task</h3>
-        <p className="text-slate-400 text-sm mb-6">Choose how you'll prove you're awake.</p>
-        <div className="space-y-4">
-          {(Object.entries(TASK_INFO) as [TaskType, any][]).map(([key, info]) => (
-            <label key={key} className={`flex items-start gap-4 p-4 rounded-xl border transition-all cursor-pointer ${task === key ? 'bg-primary/10 border-primary' : 'bg-surface-dark border-border-dark'}`}>
-              <input type="radio" className="hidden" checked={task === key} onChange={() => setTask(key)} />
-              <div className={`size-12 shrink-0 rounded-full flex items-center justify-center ${task === key ? 'bg-primary text-white' : 'bg-slate-800 text-slate-400'}`}>
-                <span className="material-symbols-outlined">{info.icon}</span>
-              </div>
-              <div className="flex-1 space-y-1">
-                <div className="flex items-center justify-between">
-                  <p className={`font-bold ${task === key ? 'text-primary' : 'text-white'}`}>{info.label}</p>
-                  <div className={`size-5 rounded-full border-2 flex items-center justify-center ${task === key ? 'border-primary' : 'border-slate-600'}`}>
-                    {task === key && <div className="size-2.5 rounded-full bg-primary" />}
-                  </div>
+      <div className="h-full flex flex-col text-white zen-gradient overflow-y-auto no-scrollbar">
+        <Header title="Protocol Task" leftBtn={<button onClick={() => setIsSelectingTask(false)} className="text-primary font-black">Back</button>} rightBtn={<div className="w-10"></div>} />
+        <div className="p-8 space-y-6">
+          <div className="space-y-4">
+            {(Object.entries(TASK_INFO) as [TaskType, any][]).map(([key, info]) => (
+              <label key={key} className={`flex items-start gap-5 p-6 rounded-[32px] glass transition-all cursor-pointer border-2 ${task === key ? 'border-primary bg-primary/10' : 'border-transparent'}`}>
+                <input type="radio" className="hidden" checked={task === key} onChange={() => setTask(key)} />
+                <div className={`size-14 shrink-0 rounded-[20px] flex items-center justify-center ${task === key ? 'bg-primary text-white shadow-lg shadow-primary/30' : 'bg-white/10 text-white/40'}`}>
+                  <span className="material-symbols-outlined text-3xl">{info.icon}</span>
                 </div>
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">{info.description(difficulty)}</p>
-                <p className="text-[11px] leading-relaxed text-slate-500 font-medium">{info.guide}</p>
-              </div>
-            </label>
-          ))}
+                <div className="flex-1 space-y-2">
+                  <p className="font-black text-lg tracking-tight">{info.label}</p>
+                  <p className="text-[10px] text-white/50 font-black uppercase tracking-[0.2em]">{info.description(difficulty)}</p>
+                  <p className="text-xs leading-relaxed text-white/30 font-bold">{info.guide}</p>
+                </div>
+              </label>
+            ))}
+          </div>
         </div>
       </div>
     );
   }
 
   if (isSelectingDate) {
+    const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
+    const startOffset = (new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay() + 6) % 7;
+    const calendarCells = [];
+    for (let i = 0; i < startOffset; i++) calendarCells.push(null);
+    for (let i = 1; i <= daysInMonth; i++) calendarCells.push(i);
+
     return (
-      <div className="h-full flex flex-col bg-background-light dark:bg-background-dark text-slate-900 dark:text-white p-5">
-        <header className="flex items-center justify-between mb-8">
-          <button onClick={() => setIsSelectingDate(false)} className="text-primary font-bold">Back</button>
-          <h2 className="text-lg font-bold">Choose Date</h2>
-          <div className="w-10"></div>
-        </header>
-        
-        <div className="bg-white dark:bg-surface-dark rounded-3xl p-6 shadow-xl border border-gray-100 dark:border-white/5">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-black">{viewDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</h3>
-            <div className="flex gap-2">
-              <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-2 rounded-lg bg-slate-100 dark:bg-white/5"><span className="material-symbols-outlined">chevron_left</span></button>
-              <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-2 rounded-lg bg-slate-100 dark:bg-white/5"><span className="material-symbols-outlined">chevron_right</span></button>
+      <div className="h-full flex flex-col text-white zen-gradient">
+        <Header title="Schedule" leftBtn={<button onClick={() => setIsSelectingDate(false)} className="text-primary font-black">Back</button>} />
+        <div className="p-8 flex-1">
+          <div className="glass rounded-[40px] p-8 shadow-2xl border border-white/10">
+            <div className="flex items-center justify-between mb-8">
+              <h3 className="text-2xl font-black tracking-tighter uppercase">{viewDate.toLocaleString('default', { month: 'short', year: 'numeric' })}</h3>
+              <div className="flex gap-3">
+                <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))} className="p-3 glass rounded-2xl"><span className="material-symbols-outlined">chevron_left</span></button>
+                <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))} className="p-3 glass rounded-2xl"><span className="material-symbols-outlined">chevron_right</span></button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-y-4 text-center mb-4">
+              {['M','T','W','T','F','S','S'].map(d => <span key={d} className="text-[10px] font-black text-white/20 uppercase tracking-[0.4em]">{d}</span>)}
+              {calendarCells.map((day, i) => (
+                <button 
+                  key={i} 
+                  disabled={!day}
+                  onClick={() => day && selectCalendarDate(day)}
+                  className={`h-11 flex items-center justify-center text-sm font-black rounded-full transition-all ${day ? (specificDate === new Date(viewDate.getFullYear(), viewDate.getMonth(), day).toISOString().split('T')[0] ? 'bg-primary text-white shadow-xl shadow-primary/30' : 'hover:bg-white/10 text-white/80') : ''}`}
+                >
+                  {day}
+                </button>
+              ))}
             </div>
           </div>
-          
-          <div className="grid grid-cols-7 gap-y-2 text-center mb-4">
-            {['M','T','W','T','F','S','S'].map(d => <span key={d} className="text-[10px] font-bold text-slate-400 uppercase">{d}</span>)}
-            {calendarCells.map((day, i) => (
-              <button 
-                key={i} 
-                disabled={!day}
-                onClick={() => day && selectCalendarDate(day)}
-                className={`h-10 flex items-center justify-center text-sm font-bold rounded-full ${day ? (specificDate === new Date(viewDate.getFullYear(), viewDate.getMonth(), day).toISOString().split('T')[0] ? 'bg-primary text-white shadow-lg' : 'hover:bg-slate-100 dark:hover:bg-white/5') : ''}`}
-              >
-                {day}
-              </button>
-            ))}
-          </div>
         </div>
-        <p className="mt-8 text-center text-sm text-slate-500 font-medium px-4">This alarm will trigger only once on the chosen date.</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-background-light dark:bg-background-dark overflow-y-auto no-scrollbar relative">
-      {showConfirm && (
-        <div className="fixed top-4 left-4 right-4 z-[100] animate-bounce">
-          <div className="bg-emerald-500 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3">
-            <span className="material-symbols-outlined">check_circle</span>
-            <span className="font-bold text-sm">Sound uploaded & selected!</span>
+    <div className="h-full flex flex-col text-white zen-gradient overflow-y-auto no-scrollbar relative">
+      <Header title={alarm ? 'Adjust Protocol' : 'New Protocol'} />
+
+      <div className="flex flex-col items-center justify-center py-10 px-8">
+        <p className="text-center text-[10px] font-black uppercase tracking-[0.4em] text-primary mb-6">Trigger Precision</p>
+        <div className="relative w-full glass rounded-[40px] p-10 shadow-2xl flex flex-col items-center gap-6">
+          <div className="flex items-center justify-center w-full">
+            <input 
+              type="time" 
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="bg-transparent border-0 text-7xl font-black p-0 text-white w-full text-center focus:ring-0 tracking-tighter cursor-pointer"
+            />
+          </div>
+          
+          {/* Explicit AM/PM Toggles */}
+          <div className="flex bg-white/5 rounded-2xl p-1 w-full max-w-[200px] border border-white/10">
+            <button 
+              onClick={() => handlePeriodToggle('AM')}
+              className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${currentPeriod === 'AM' ? 'bg-primary text-white shadow-lg' : 'text-white/30'}`}
+            >
+              AM
+            </button>
+            <button 
+              onClick={() => handlePeriodToggle('PM')}
+              className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${currentPeriod === 'PM' ? 'bg-primary text-white shadow-lg' : 'text-white/30'}`}
+            >
+              PM
+            </button>
+          </div>
+          
+          <div className="flex items-baseline gap-2 mt-2">
+             <span className="text-2xl font-black text-white">{displayH12.toString().padStart(2, '0')}:{mStr}</span>
+             <span className="text-sm font-bold text-white/40 uppercase tracking-widest">{currentPeriod}</span>
           </div>
         </div>
-      )}
-
-      <header className="sticky top-0 z-10 flex items-center justify-between p-4 bg-background-light/90 dark:bg-background-dark/90 backdrop-blur-md">
-        <button onClick={onCancel} className="text-primary font-medium">Cancel</button>
-        <h2 className="text-lg font-bold dark:text-white">{alarm ? 'Edit Alarm' : 'Add Alarm'}</h2>
-        <button onClick={handleSave} className="text-primary font-bold">Save</button>
-      </header>
-
-      <div className="flex flex-col items-center justify-center py-6 px-6">
-        <p className="text-center text-[11px] font-black uppercase tracking-widest text-primary mb-4 animate-fade-in">
-          Set Precise Wake-Up Time
-        </p>
-        <div className="relative w-full max-w-[280px] bg-white dark:bg-card-dark rounded-3xl p-6 shadow-xl border border-slate-100 dark:border-white/5">
-          <div className="flex items-center justify-center gap-4">
-            <div className="flex-1 text-center">
-              <label className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-2 block">Trigger Time</label>
-              <input 
-                type="time" 
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="bg-slate-50 dark:bg-background-dark border-0 rounded-2xl text-4xl font-black p-3 dark:text-white w-full text-center focus:ring-2 focus:ring-primary/50 transition-all"
-              />
-            </div>
-            <div className="flex flex-col gap-2 pt-5">
-              <button onClick={() => setPeriod('AM')} className={`w-12 h-10 rounded-xl font-bold transition-all ${period === 'AM' ? 'bg-primary text-white shadow-lg shadow-primary/30' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>AM</button>
-              <button onClick={() => setPeriod('PM')} className={`w-12 h-10 rounded-xl font-bold transition-all ${period === 'PM' ? 'bg-primary text-white shadow-lg shadow-primary/30' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>PM</button>
-            </div>
-          </div>
-        </div>
-        <p className="mt-4 text-center text-[11px] text-slate-500 dark:text-slate-400 font-medium px-8 leading-relaxed max-w-xs">
-          This is the exact time your alarm will trigger. Remember, once it starts, you <span className="text-primary font-bold italic">must</span> complete the assigned challenge to stop the sound.
-        </p>
       </div>
 
-      <div className="px-4 space-y-6 pb-12">
-        <div className="rounded-xl bg-white dark:bg-card-dark overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 shadow-sm">
-          <div className="flex items-center px-4 h-14">
-            <label className="text-slate-900 dark:text-white text-base font-medium w-24 shrink-0">Label</label>
-            <input className="bg-transparent border-0 text-right w-full text-slate-500 dark:text-slate-400 focus:ring-0" placeholder="Alarm" value={label} onChange={(e) => setLabel(e.target.value)} type="text" />
+      <div className="px-6 space-y-8 pb-32">
+        <div className="rounded-[32px] glass overflow-hidden divide-y divide-white/5 shadow-sm">
+          <div className="flex items-center px-8 h-18">
+            <label className="text-white/40 text-[10px] font-black uppercase tracking-[0.4em] w-28 shrink-0">Identity</label>
+            <input className="bg-transparent border-0 text-right w-full text-white font-black text-lg focus:ring-0 placeholder:text-white/10" placeholder="Protocol Label" value={label} onChange={(e) => setLabel(e.target.value)} type="text" />
           </div>
-          <div className="flex items-center justify-between px-4 h-14">
+          <div className="flex items-center justify-between px-8 h-18">
             <div className="flex flex-col">
-              <label className="text-slate-900 dark:text-white text-base font-medium">Specific Date</label>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">One-time Trigger</p>
+              <label className="text-white font-black text-base tracking-tight">Fixed Burst</label>
+              <p className="text-[9px] text-white/30 font-black uppercase tracking-[0.2em]">Non-recurring Signal</p>
             </div>
-             <label className="relative flex h-[31px] w-[51px] cursor-pointer items-center rounded-full bg-slate-200 dark:bg-[#39393d] p-0.5 has-[:checked]:bg-primary transition-colors">
+             <label className="relative flex h-[34px] w-[60px] cursor-pointer items-center rounded-full bg-white/5 p-1.5 has-[:checked]:bg-primary transition-all">
                 <input type="checkbox" className="peer sr-only" checked={useSpecificDate} onChange={(e) => setUseSpecificDate(e.target.checked)}/>
-                <div className="h-[27px] w-[27px] rounded-full bg-white shadow-sm transition-all peer-checked:translate-x-5"></div>
+                <div className="h-[24px] w-[24px] rounded-full bg-white shadow-xl transition-all peer-checked:translate-x-[26px]"></div>
               </label>
           </div>
           {useSpecificDate && (
-            <div onClick={() => setIsSelectingDate(true)} className="flex items-center justify-between px-4 h-14 cursor-pointer active:bg-slate-50 dark:active:bg-slate-800 transition-colors">
-               <label className="text-slate-900 dark:text-white text-base font-medium">Select Date</label>
-               <div className="flex items-center gap-1 text-primary font-bold">
-                 <span>{specificDate || 'Pick a date'}</span>
-                 <span className="material-symbols-outlined text-lg">calendar_month</span>
+            <div onClick={() => setIsSelectingDate(true)} className="flex items-center justify-between px-8 h-18 cursor-pointer active:bg-white/5">
+               <label className="text-white font-black text-base">Date</label>
+               <div className="flex items-center gap-3 text-primary font-black uppercase tracking-widest text-sm">
+                 <span>{specificDate || 'Select'}</span>
+                 <span className="material-symbols-outlined">event_available</span>
                </div>
             </div>
           )}
@@ -292,11 +243,11 @@ const AddAlarmScreen: React.FC<Props> = ({
 
         {!useSpecificDate && (
           <div>
-            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider px-2 mb-2">Repeat Schedule</h3>
-            <div className="rounded-xl bg-white dark:bg-card-dark p-2 shadow-sm">
-              <div className="flex justify-between gap-1">
+            <h3 className="text-white/30 text-[10px] font-black uppercase tracking-[0.4em] px-8 mb-4">Recurring Cycle</h3>
+            <div className="glass rounded-[32px] p-4">
+              <div className="flex justify-between gap-2">
                 {DAYS_OF_WEEK.map((day, idx) => (
-                  <button key={`${day}-${idx}`} onClick={() => toggleDay(idx)} className={`flex-1 h-9 rounded-lg flex items-center justify-center text-xs font-semibold transition-colors ${days.includes(idx) ? 'bg-primary text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+                  <button key={`${day}-${idx}`} onClick={() => toggleDay(idx)} className={`flex-1 h-12 rounded-[18px] flex items-center justify-center text-sm font-black transition-all ${days.includes(idx) ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-white/20 hover:text-white/40'}`}>
                     {day}
                   </button>
                 ))}
@@ -305,56 +256,33 @@ const AddAlarmScreen: React.FC<Props> = ({
           </div>
         )}
 
-        <div>
-          <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider px-2 mb-2">Wake Up Challenge</h3>
-          <div className="rounded-xl bg-white dark:bg-card-dark overflow-hidden shadow-sm">
-            <div onClick={() => setIsSelectingTask(true)} className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800 cursor-pointer active:bg-slate-50 dark:active:bg-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-orange-500/20 flex items-center justify-center text-orange-500">
-                  <span className="material-symbols-outlined text-lg">{TASK_INFO[task].icon}</span>
-                </div>
-                <span className="text-slate-900 dark:text-white font-medium">Task Type</span>
+        <div className="glass rounded-[32px] overflow-hidden shadow-sm">
+          <div onClick={() => setIsSelectingTask(true)} className="flex items-center justify-between p-8 border-b border-white/5 active:bg-white/5">
+            <div className="flex items-center gap-4">
+              <div className="size-10 rounded-2xl bg-primary/20 flex items-center justify-center text-primary">
+                <span className="material-symbols-outlined text-xl">{TASK_INFO[task].icon}</span>
               </div>
-              <div className="flex items-center gap-1 text-slate-500">
-                <span className="text-xs">{TASK_INFO[task].label}</span>
-                <span className="material-symbols-outlined text-xl">chevron_right</span>
-              </div>
+              <span className="text-white font-black tracking-tight text-lg">Challenge Mode</span>
             </div>
-            <div className="p-4">
-              <div className="flex h-10 w-full items-center justify-center rounded-lg bg-slate-100 dark:bg-[#111318] p-1">
-                {(['Easy', 'Medium', 'Hard'] as Difficulty[]).map(d => (
-                  <button key={d} onClick={() => setDifficulty(d)} className={`flex-1 h-full rounded-md text-sm font-medium transition-all ${difficulty === d ? 'bg-white dark:bg-card-dark shadow-sm text-slate-900 dark:text-white' : 'text-slate-500'}`}>
-                    {d}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center gap-2 text-primary font-black uppercase text-[10px] tracking-widest">
+              <span>{task}</span>
+              <span className="material-symbols-outlined">chevron_right</span>
             </div>
           </div>
-        </div>
-
-        <div>
-          <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider px-2 mb-2">Enforcement Sound</h3>
-          <div className="rounded-xl bg-white dark:bg-card-dark overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 shadow-sm">
-            {PRESET_SOUNDS.map(s => (
-              <label key={s} className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-l-4 border-transparent has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                <div className="flex items-center gap-3">
-                  <span className={`material-symbols-outlined ${activePreview === s ? 'text-primary animate-pulse' : 'text-slate-400'}`}>{activePreview === s ? 'volume_up' : getSoundIcon(s)}</span>
-                  <span className="text-slate-900 dark:text-white font-medium">{s}</span>
-                </div>
-                <input type="radio" name="sound" className="size-5 text-primary" checked={sound === s} onChange={() => { setSound(s); previewSound(s); }} />
-              </label>
-            ))}
-            <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center gap-3 p-4 text-primary font-bold hover:bg-slate-50 dark:hover:bg-slate-800/50">
-              <span className="material-symbols-outlined">add_circle</span>
-              <span>Upload Custom Sound</span>
-              <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
-            </button>
+          <div className="p-8">
+            <div className="flex h-14 w-full items-center justify-center rounded-[20px] bg-white/5 p-1.5">
+              {(['Easy', 'Medium', 'Hard'] as Difficulty[]).map(d => (
+                <button key={d} onClick={() => setDifficulty(d)} className={`flex-1 h-full rounded-[16px] text-xs font-black uppercase tracking-widest transition-all ${difficulty === d ? 'bg-white text-background-dark shadow-xl' : 'text-white/30'}`}>
+                  {d}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         {alarm && (
-          <button onClick={() => onDelete?.(alarm.id)} className="w-full py-4 bg-red-500/10 text-red-500 font-bold rounded-xl active:scale-[0.98] transition-transform">
-            Delete Alarm
+          <button onClick={() => onDelete?.(alarm.id)} className="w-full h-18 glass border-red-500/20 text-red-500 font-black tracking-widest uppercase text-sm rounded-[32px] active:scale-[0.98] transition-all">
+            Decommission Alarm
           </button>
         )}
       </div>
